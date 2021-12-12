@@ -27,6 +27,8 @@ except ImportError:
 
 from phe import EncodedNumber
 from phe.util import invert, powmod, getprimeover, isqrt
+import torch as t
+import numpy as np
 
 # Paillier cryptosystem is based on integer factorisation.
 # The default is chosen to give a minimum of 128 bits of security.
@@ -165,13 +167,25 @@ class PaillierPublicKey(object):
           ValueError: if *value* is out of range or *precision* is so
             high that *value* is rounded to zero.
         """
-
+        if isinstance(value, list):
+            return self.encrypt_array(value, precision, r_value)
+        if isinstance(value, t.Tensor):
+            return self.encrypt_tensor(value, precision, r_value)
         if isinstance(value, EncodedNumber):
             encoding = value
         else:
             encoding = EncodedNumber.encode(self, value, precision)
 
         return self.encrypt_encoded(encoding, r_value)
+    
+    def encrypt_tensor(self, tensor, precision, r_value):
+        shape = tensor.shape
+        secrets_list = tensor.flatten().tolist()
+        encrypted_array = self.encrypt_array(secrets_list, precision, r_value)
+        return np.asarray(encrypted_array).reshape(shape)
+
+    def encrypt_array(self, array, precision, r_value):
+        return [self.encrypt_encoded(EncodedNumber.encode(self, val, precision), r_value) for val in array] 
 
     def encrypt_encoded(self, encoding, r_value):
         """Paillier encrypt an encoded value.
@@ -286,8 +300,21 @@ class PaillierPrivateKey(object):
           ValueError: If *encrypted_number* was encrypted against a
             different key.
         """
+        if isinstance(encrypted_number, list):
+          return self.decrypt_array(encrypted_number)
+        if isinstance(encrypted_number, np.ndarray):
+          return self.decrypt_tensor(encrypted_number)
         encoded = self.decrypt_encoded(encrypted_number)
         return encoded.decode()
+
+    def decrypt_tensor(self, encrypted_tensor):
+        shape = encrypted_tensor.shape
+        flattened_list = encrypted_tensor.flatten().tolist()
+        decrypted_list = self.decrypt_array(flattened_list)
+        return t.as_tensor(decrypted_list).reshape(shape)
+
+    def decrypt_array(self, encrypted_array):
+        return [self.decrypt_encoded(encrypted_num).decode() for encrypted_num in encrypted_array]
 
     def decrypt_encoded(self, encrypted_number, Encoding=None):
         """Return the :class:`EncodedNumber` decrypted from *encrypted_number*.
