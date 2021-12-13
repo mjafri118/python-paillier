@@ -1,6 +1,7 @@
 import fractions
 import math
 import sys
+import torch
 
 
 class EncodedNumber(object):
@@ -196,6 +197,37 @@ class EncodedNumber(object):
                              % (public_key.max_int, int_rep))
 
         # Wrap negative numbers by adding n
+        return cls(public_key, int_rep % public_key.n, exponent)
+
+    @classmethod
+    def tencode(cls, public_key, tensor, precision=None, max_exponent=None):
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError("Expected tensor but got: %s" % type(tensor))
+        proc = "cuda" if torch.cuda.is_available() else "cpu"
+        tensor = tensor.to(proc)
+        if precision is None:
+            if not tensor.is_floating_point() and not tensor.is_complex():
+                prec_exponent = 0
+            elif tensor.is_floating_point():
+                bin_flt_exponent = tensor.frexp()[1]
+                bin_lsb_exponent = bin_flt_exponent - cls.FLOAT_MANTISSA_BITS
+                prec_exponent = (bin_lsb_exponent / cls.LOG2_BASE).to(torch.int)
+            else:
+                raise TypeError("Don't know the precision of type %s." % tensor.dtype)
+        else:
+            prec_exponent = torch.full(tensor.size(), math.floor(math.log(precision, cls.BASE)), dtype=torch.int).to(proc)
+
+        if max_exponent is None:
+            exponent = prec_exponent
+        else:
+            exponent = prec_exponent.clamp(max=max_exponent)
+
+        # TODO: handle floating point overflows when multiplying float tensor by very large integer values
+        int_rep = (tensor * cls.BASE ** -exponent).round().to(torch.int) 
+
+        if torch.all(int_rep.abs() > public_key.max_int):
+            raise ValueError("Integer needs to be within +/- %d" % (public_key.max_int))
+
         return cls(public_key, int_rep % public_key.n, exponent)
 
     def decode(self):

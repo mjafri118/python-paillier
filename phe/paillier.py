@@ -19,6 +19,8 @@
 
 """Paillier encryption library for partially homomorphic encryption."""
 import random
+import torch
+from torch._C import R
 
 try:
     from collections.abc import Mapping
@@ -137,6 +139,26 @@ class PaillierPublicKey(object):
 
         return (nude_ciphertext * obfuscator) % self.nsquare
 
+    def raw_tencrypt(self, plaintext, r_value=None):
+        if not isinstance(plaintext, torch.Tensor):
+            raise TypeError("Expected tensor but got: %s" % type(plaintext))
+        if plaintext.is_floating_point() or plaintext.is_complex():
+            raise TypeError("Expected int type but got: %s" % plaintext.dtype)
+
+        proc = "cuda" if torch.cuda.is_available() else "cpu"
+        plaintext = plaintext.to(proc)
+
+        # if torch.all(self.n - self.max_int <= plaintext) and torch.all(plaintext < self.n):
+        #     neg_plaintext = self.n - plaintext
+        #     neg_ciphertext = (self.n * neg_plaintext + 1) % self.nsquare
+        #     nude_ciphertext = 
+        nude_ciphertext = (self.n * plaintext + 1) % self.nsquare
+
+        r = r_value or self.get_random_lt_n()
+        obfuscator = powmod(r, self.n, self.nsquare)
+
+        return (nude_ciphertext * obfuscator) % self.nsquare
+
     def get_random_lt_n(self):
         """Return a cryptographically random number less than :attr:`n`"""
         return random.SystemRandom().randrange(1, self.n)
@@ -168,6 +190,9 @@ class PaillierPublicKey(object):
 
         if isinstance(value, EncodedNumber):
             encoding = value
+        elif isinstance(value, torch.Tensor):
+            encoding = EncodedNumber.tencode(self, value, precision)
+            return self.encrypt_tencoded(self, encoding, r_value)
         else:
             encoding = EncodedNumber.encode(self, value, precision)
 
@@ -187,6 +212,14 @@ class PaillierPublicKey(object):
         # If r_value is None, obfuscate in a call to .obfuscate() (below)
         obfuscator = r_value or 1
         ciphertext = self.raw_encrypt(encoding.encoding, r_value=obfuscator)
+        encrypted_number = EncryptedNumber(self, ciphertext, encoding.exponent)
+        if r_value is None:
+            encrypted_number.obfuscate()
+        return encrypted_number
+
+    def encrypt_tencoded(self, encoding, r_value):
+        obfuscator = r_value or 1
+        ciphertext = self.raw_tencrypt(encoding.encoding, r_value=obfuscator)
         encrypted_number = EncryptedNumber(self, ciphertext, encoding.exponent)
         if r_value is None:
             encrypted_number.obfuscate()
