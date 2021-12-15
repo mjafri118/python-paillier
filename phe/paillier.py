@@ -99,7 +99,9 @@ class PaillierPublicKey(object):
     def __hash__(self):
         return hash(self.n)
 
-    def raw_encrypt(self, plaintext, r_value=None):
+    # Modify the alphaK value, which is alpha multiplied by the number of devices in a round
+    
+    def raw_encrypt(self, plaintext, r_value=None,alphaK=101*5):
         """Paillier encryption of a positive integer plaintext < :attr:`n`.
 
         You probably should be using :meth:`encrypt` instead, because it
@@ -134,8 +136,11 @@ class PaillierPublicKey(object):
 
         r = r_value or self.get_random_lt_n()
         obfuscator = powmod(r, self.n, self.nsquare)
+        
+        enc1 = (nude_ciphertext * obfuscator) % self.nsquare
+        roundedEnc = alphaK*round(enc1/alphaK)
 
-        return (nude_ciphertext * obfuscator) % self.nsquare
+        return 
 
     def get_random_lt_n(self):
         """Return a cryptographically random number less than :attr:`n`"""
