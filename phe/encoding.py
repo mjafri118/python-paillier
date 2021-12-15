@@ -205,30 +205,34 @@ class EncodedNumber(object):
             raise TypeError("Expected tensor but got: %s" % type(tensor))
         proc = "cuda" if torch.cuda.is_available() else "cpu"
         tensor = tensor.to(proc)
-        if precision is None:
-            if not tensor.is_floating_point() and not tensor.is_complex():
-                prec_exponent = 0
-            elif tensor.is_floating_point():
-                bin_flt_exponent = tensor.frexp()[1]
-                bin_lsb_exponent = bin_flt_exponent - cls.FLOAT_MANTISSA_BITS
-                prec_exponent = (bin_lsb_exponent / cls.LOG2_BASE).to(torch.int)
-            else:
-                raise TypeError("Don't know the precision of type %s." % tensor.dtype)
-        else:
-            prec_exponent = torch.full(tensor.size(), math.floor(math.log(precision, cls.BASE)), dtype=torch.int).to(proc)
+        # if precision is None:
+        #     if not tensor.is_floating_point() and not tensor.is_complex():
+        #         tensor = tensor.to(torch.int32)
+        #         prec_exponent = 0
+        #     elif tensor.is_floating_point():
+        #         bin_flt_exponent = tensor.frexp()[1]
+        #         bin_lsb_exponent = bin_flt_exponent - cls.FLOAT_MANTISSA_BITS
+        #         prec_exponent = (bin_lsb_exponent / cls.LOG2_BASE).floor()
+        #     else:
+        #         raise TypeError("Don't know the precision of type %s." % tensor.dtype)
+        # else:
+        #     prec_exponent = torch.full(tensor.size(), math.floor(math.log(precision, cls.BASE))).to(proc)
 
-        if max_exponent is None:
-            exponent = prec_exponent
-        else:
-            exponent = prec_exponent.clamp(max=max_exponent)
+        # if max_exponent is None:
+        #     exponent = prec_exponent
+        # else:
+        #     exponent = prec_exponent.clamp(max=max_exponent)
+        
+        # # since the base is 16 = 2^4 technically all we need to do is 4 * -exponent, since 16^-exponent = 2^(4 * -exponent) = 1 x 2^(-4exponent). We then have the
+        # # floating point mantissa of 1 and the floating point exponent of -4exponent and can represent as float with math.ldexp()
+        # # TODO: handle floating point overflows when multiplying float tensor by very large integer values
+        # int_rep = (tensor * cls.BASE ** -exponent).round().to(torch.int64)
+        # # TODO: I need to use numpy arrays with bigint dtype so that this comparison is possible, otherwise the conversion of max_int to an int64 fails
+        # if torch.all(int_rep.abs() > public_key.max_int):
+        #     raise ValueError("Integer needs to be within +/- %d" % (public_key.max_int))
 
-        # TODO: handle floating point overflows when multiplying float tensor by very large integer values
-        int_rep = (tensor * cls.BASE ** -exponent).round().to(torch.int) 
-
-        if torch.all(int_rep.abs() > public_key.max_int):
-            raise ValueError("Integer needs to be within +/- %d" % (public_key.max_int))
-
-        return cls(public_key, int_rep % public_key.n, exponent)
+        # return cls(public_key, int_rep % public_key.n, exponent)
+        return cls(public_key, tensor.to(torch.int32) % public_key.n, 0)
 
     def decode(self):
         """Decode plaintext and return the result.

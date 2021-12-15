@@ -20,7 +20,6 @@
 """Paillier encryption library for partially homomorphic encryption."""
 import random
 import torch
-from torch._C import R
 
 try:
     from collections.abc import Mapping
@@ -33,7 +32,7 @@ from phe.util import invert, powmod, getprimeover, isqrt
 # Paillier cryptosystem is based on integer factorisation.
 # The default is chosen to give a minimum of 128 bits of security.
 # https://www.keylength.com/en/4/
-DEFAULT_KEYSIZE = 3072
+DEFAULT_KEYSIZE = 16#3072
 
 
 def generate_paillier_keypair(private_keyring=None, n_length=DEFAULT_KEYSIZE):
@@ -192,7 +191,7 @@ class PaillierPublicKey(object):
             encoding = value
         elif isinstance(value, torch.Tensor):
             encoding = EncodedNumber.tencode(self, value, precision)
-            return self.encrypt_tencoded(self, encoding, r_value)
+            return self.encrypt_tencoded(encoding, r_value)
         else:
             encoding = EncodedNumber.encode(self, value, precision)
 
