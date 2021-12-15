@@ -17,6 +17,8 @@ import os
 import random
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 from binascii import hexlify, unhexlify
+import torch
+import cupy as cp
 
 try:
     import gmpy2
@@ -34,6 +36,56 @@ except ImportError:
 # From a quick experiment on our machine, this seems to be the break even:
 _USE_MOD_FROM_GMP_SIZE = (1 << (8*2))
 
+# bignum base (bignums are little endian)
+BASE = 2**16
+
+
+def int_to_bignum(val):
+    result = []
+    while val != 0:
+        val, remainder = divmod(val, BASE)
+        result.append(remainder)
+    return cp.array(result, dtype=cp.uint32)
+
+def tensor_to_bignum(array):
+    remainders = []
+    while cp.any(array != 0):
+        remainders.append(array % BASE)
+        array = array // BASE
+    return cp.stack(remainders, axis=2)
+
+def bignum_add(a, b):
+    if a.shape[-1] < b.shape[-1]:
+        a = cp.concatenate([a, cp.zeros(b.shape[-1] - a.shape[-1], dtype=cp.uint32)], axis=-1)
+    elif b.shape[-1] < a.shape[-1]:
+        b = cp.concatenate([b, cp.zeros(a.shape[-1] - b.shape[-1], dtype=cp.uint32)], axis=-1)
+
+    summed = a + b
+    while cp.any(summed >= BASE):
+        carries = cp.concatenate([cp.zeros(summed.shape[:-1] + (1,), dtype=cp.uint32), summed // BASE], axis=-1)
+        results = cp.concatenate([summed % BASE, cp.zeros(summed.shape[:-1] + (1,), dtype=cp.uint32)], axis=-1)
+        summed = carries + results
+
+    if cp.all(summed[...,-1:] == 0):
+        summed, _ = cp.split(summed, [-1], axis=-1)
+    return summed
+
+def bignum_multiply(a, b):
+    product = cp.expand_dims(a, axis=-1) * cp.expand_dims(b, axis=-2)
+    while cp.any(product >= BASE):
+        carries = cp.concatenate([cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32), product // BASE], axis=-1)
+        results = cp.concatenate([product % BASE, cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32)], axis=-1)
+        product = carries + results
+        print(f'------------------------------------\n')
+    product = cp.sum(product, axis=-2)
+    while cp.any(product >= BASE):
+        carries = cp.concatenate([cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32), product // BASE], axis=-1)
+        results = cp.concatenate([product % BASE, cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32)], axis=-1)
+        product = carries + results
+        print(f'------------------------------------\n')
+    if cp.all(product[...,-1:] == 0):
+        product, _ = cp.split(product, [-1], axis=-1)
+    return product
 
 def powmod(a, b, c):
     """

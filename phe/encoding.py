@@ -1,8 +1,6 @@
 import fractions
 import math
 import sys
-import torch
-
 
 class EncodedNumber(object):
     """Represents a float or int encoded for Paillier encryption.
@@ -103,136 +101,9 @@ class EncodedNumber(object):
     LOG2_BASE = math.log(BASE, 2)
     FLOAT_MANTISSA_BITS = sys.float_info.mant_dig
 
-    def __init__(self, public_key, encoding, exponent):
+    def __init__(self, public_key, encoding):
         self.public_key = public_key
         self.encoding = encoding
-        self.exponent = exponent
-
-    @classmethod
-    def encode(cls, public_key, scalar, precision=None, max_exponent=None):
-        """Return an encoding of an int or float.
-
-        This encoding is carefully chosen so that it supports the same
-        operations as the Paillier cryptosystem.
-
-        If *scalar* is a float, first approximate it as an int, `int_rep`:
-
-            scalar = int_rep * (:attr:`BASE` ** :attr:`exponent`),
-
-        for some (typically negative) integer exponent, which can be
-        tuned using *precision* and *max_exponent*. Specifically,
-        :attr:`exponent` is chosen to be equal to or less than
-        *max_exponent*, and such that the number *precision* is not
-        rounded to zero.
-
-        Having found an integer representation for the float (or having
-        been given an int `scalar`), we then represent this integer as
-        a non-negative integer < :attr:`~PaillierPublicKey.n`.
-
-        Paillier homomorphic arithemetic works modulo
-        :attr:`~PaillierPublicKey.n`. We take the convention that a
-        number x < n/3 is positive, and that a number x > 2n/3 is
-        negative. The range n/3 < x < 2n/3 allows for overflow
-        detection.
-
-        Args:
-          public_key (PaillierPublicKey): public key for which to encode
-            (this is necessary because :attr:`~PaillierPublicKey.n`
-            varies).
-          scalar: an int or float to be encrypted.
-            If int, it must satisfy abs(*value*) <
-            :attr:`~PaillierPublicKey.n`/3.
-            If float, it must satisfy abs(*value* / *precision*) <<
-            :attr:`~PaillierPublicKey.n`/3
-            (i.e. if a float is near the limit then detectable
-            overflow may still occur)
-          precision (float): Choose exponent (i.e. fix the precision) so
-            that this number is distinguishable from zero. If `scalar`
-            is a float, then this is set so that minimal precision is
-            lost. Lower precision leads to smaller encodings, which
-            might yield faster computation.
-          max_exponent (int): Ensure that the exponent of the returned
-            `EncryptedNumber` is at most this.
-
-        Returns:
-          EncodedNumber: Encoded form of *scalar*, ready for encryption
-          against *public_key*.
-        """
-        # Calculate the maximum exponent for desired precision
-        if precision is None:
-            if isinstance(scalar, int):
-                prec_exponent = 0
-            elif isinstance(scalar, float):
-                # Encode with *at least* as much precision as the python float
-                # What's the base-2 exponent on the float?
-                bin_flt_exponent = math.frexp(scalar)[1]
-
-                # What's the base-2 exponent of the least significant bit?
-                # The least significant bit has value 2 ** bin_lsb_exponent
-                bin_lsb_exponent = bin_flt_exponent - cls.FLOAT_MANTISSA_BITS
-
-                # What's the corresponding base BASE exponent? Round that down.
-                prec_exponent = math.floor(bin_lsb_exponent / cls.LOG2_BASE)
-            else:
-                raise TypeError("Don't know the precision of type %s."
-                                % type(scalar))
-        else:
-            prec_exponent = math.floor(math.log(precision, cls.BASE))
-
-        # Remember exponents are negative for numbers < 1.
-        # If we're going to store numbers with a more negative
-        # exponent than demanded by the precision, then we may
-        # as well bump up the actual precision.
-        if max_exponent is None:
-            exponent = prec_exponent
-        else:
-            exponent = min(max_exponent, prec_exponent)
-
-        # Use rationals instead of floats to avoid overflow.
-        int_rep = round(fractions.Fraction(scalar)
-                        * fractions.Fraction(cls.BASE) ** -exponent)
-
-        if abs(int_rep) > public_key.max_int:
-            raise ValueError('Integer needs to be within +/- %d but got %d'
-                             % (public_key.max_int, int_rep))
-
-        # Wrap negative numbers by adding n
-        return cls(public_key, int_rep % public_key.n, exponent)
-
-    @classmethod
-    def tencode(cls, public_key, tensor, precision=None, max_exponent=None):
-        if not isinstance(tensor, torch.Tensor):
-            raise TypeError("Expected tensor but got: %s" % type(tensor))
-        proc = "cuda" if torch.cuda.is_available() else "cpu"
-        tensor = tensor.to(proc)
-        # if precision is None:
-        #     if not tensor.is_floating_point() and not tensor.is_complex():
-        #         tensor = tensor.to(torch.int32)
-        #         prec_exponent = 0
-        #     elif tensor.is_floating_point():
-        #         bin_flt_exponent = tensor.frexp()[1]
-        #         bin_lsb_exponent = bin_flt_exponent - cls.FLOAT_MANTISSA_BITS
-        #         prec_exponent = (bin_lsb_exponent / cls.LOG2_BASE).floor()
-        #     else:
-        #         raise TypeError("Don't know the precision of type %s." % tensor.dtype)
-        # else:
-        #     prec_exponent = torch.full(tensor.size(), math.floor(math.log(precision, cls.BASE))).to(proc)
-
-        # if max_exponent is None:
-        #     exponent = prec_exponent
-        # else:
-        #     exponent = prec_exponent.clamp(max=max_exponent)
-        
-        # # since the base is 16 = 2^4 technically all we need to do is 4 * -exponent, since 16^-exponent = 2^(4 * -exponent) = 1 x 2^(-4exponent). We then have the
-        # # floating point mantissa of 1 and the floating point exponent of -4exponent and can represent as float with math.ldexp()
-        # # TODO: handle floating point overflows when multiplying float tensor by very large integer values
-        # int_rep = (tensor * cls.BASE ** -exponent).round().to(torch.int64)
-        # # TODO: I need to use numpy arrays with bigint dtype so that this comparison is possible, otherwise the conversion of max_int to an int64 fails
-        # if torch.all(int_rep.abs() > public_key.max_int):
-        #     raise ValueError("Integer needs to be within +/- %d" % (public_key.max_int))
-
-        # return cls(public_key, int_rep % public_key.n, exponent)
-        return cls(public_key, tensor.to(torch.int32) % public_key.n, 0)
 
     def decode(self):
         """Decode plaintext and return the result.

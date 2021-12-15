@@ -19,7 +19,7 @@
 
 """Paillier encryption library for partially homomorphic encryption."""
 import random
-import torch
+import cupy as cp
 
 try:
     from collections.abc import Mapping
@@ -27,12 +27,12 @@ except ImportError:
     Mapping = dict
 
 from phe import EncodedNumber
-from phe.util import invert, powmod, getprimeover, isqrt
+from phe.util import invert, powmod, getprimeover, isqrt, int_to_bignum, tensor_to_bignum, bignum_multiply, bignum_add
 
 # Paillier cryptosystem is based on integer factorisation.
 # The default is chosen to give a minimum of 128 bits of security.
 # https://www.keylength.com/en/4/
-DEFAULT_KEYSIZE = 16#3072
+DEFAULT_KEYSIZE = 3072
 
 
 def generate_paillier_keypair(private_keyring=None, n_length=DEFAULT_KEYSIZE):
@@ -100,7 +100,7 @@ class PaillierPublicKey(object):
     def __hash__(self):
         return hash(self.n)
 
-    def raw_encrypt(self, plaintext, r_value=None):
+    def raw_encrypt(self, plainarray, r_value=None):
         """Paillier encryption of a positive integer plaintext < :attr:`n`.
 
         You probably should be using :meth:`encrypt` instead, because it
@@ -119,24 +119,23 @@ class PaillierPublicKey(object):
         Raises:
           TypeError: if plaintext is not an int.
         """
-        if not isinstance(plaintext, int):
-            raise TypeError('Expected int type plaintext but got: %s' %
-                            type(plaintext))
+        if not isinstance(plainarray, cp.ndarray):
+            raise TypeError(f'Expected uint32 cupy array but got {type(plainarray)}')
 
-        if self.n - self.max_int <= plaintext < self.n:
-            # Very large plaintext, take a sneaky shortcut using inverses
-            neg_plaintext = self.n - plaintext  # = abs(plaintext - nsquare)
-            neg_ciphertext = (self.n * neg_plaintext + 1) % self.nsquare
-            nude_ciphertext = invert(neg_ciphertext, self.nsquare)
-        else:
-            # we chose g = n + 1, so that we can exploit the fact that
-            # (n+1)^plaintext = n*plaintext + 1 mod n^2
-            nude_ciphertext = (self.n * plaintext + 1) % self.nsquare
+        # we chose g = n + 1, so that we can exploit the fact that
+        # (n+1)^plaintext = n*plaintext + 1 mod n^2
+
+        # convert to bignum for multiplication
+        n = int_to_bignum(self.n)
+        plainarray = tensor_to_bignum(plainarray)
+
+        nude_cipherarray = bignum_add(bignum_multiply(n, plainarray), cp.array([1], dtype=cp.uint32))
 
         r = r_value or self.get_random_lt_n()
-        obfuscator = powmod(r, self.n, self.nsquare)
+        obfuscator = int_to_bignum(powmod(r, self.n, self.nsquare))
+        obfuscated_cipherarray = bignum_multiply(nude_cipherarray, obfuscator)
 
-        return (nude_ciphertext * obfuscator) % self.nsquare
+        return (nude_cipherarray * obfuscator) % self.nsquare
 
     def raw_tencrypt(self, plaintext, r_value=None):
         if not isinstance(plaintext, torch.Tensor):
@@ -162,7 +161,7 @@ class PaillierPublicKey(object):
         """Return a cryptographically random number less than :attr:`n`"""
         return random.SystemRandom().randrange(1, self.n)
 
-    def encrypt(self, value, precision=None, r_value=None):
+    def encrypt(self, array, r_value=None):
         """Encode and Paillier encrypt a real number *value*.
 
         Args:
@@ -187,13 +186,12 @@ class PaillierPublicKey(object):
             high that *value* is rounded to zero.
         """
 
-        if isinstance(value, EncodedNumber):
-            encoding = value
-        elif isinstance(value, torch.Tensor):
-            encoding = EncodedNumber.tencode(self, value, precision)
-            return self.encrypt_tencoded(encoding, r_value)
+        if isinstance(array, EncodedNumber):
+            encoding = array
+        elif isinstance(array, cp.ndarray):
+            encoding = EncodedNumber(self, array) # array must be type cp.uint32
         else:
-            encoding = EncodedNumber.encode(self, value, precision)
+            raise TypeError(f'Expected EncodedNumber or Tensor but got {type(array)}')
 
         return self.encrypt_encoded(encoding, r_value)
 
