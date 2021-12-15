@@ -19,7 +19,9 @@
 
 """Paillier encryption library for partially homomorphic encryption."""
 import random
-import torch
+from torch.multiprocessing import Pool
+from functools import partial
+
 
 try:
     from collections.abc import Mapping
@@ -28,12 +30,14 @@ except ImportError:
 
 from phe import EncodedNumber
 from phe.util import invert, powmod, getprimeover, isqrt
+import torch as t
+import numpy as np
 
 # Paillier cryptosystem is based on integer factorisation.
 # The default is chosen to give a minimum of 128 bits of security.
 # https://www.keylength.com/en/4/
-DEFAULT_KEYSIZE = 16#3072
-
+DEFAULT_KEYSIZE = 3072
+THREAD_NUM = 16
 
 def generate_paillier_keypair(private_keyring=None, n_length=DEFAULT_KEYSIZE):
     """Return a new :class:`PaillierPublicKey` and :class:`PaillierPrivateKey`.
@@ -138,26 +142,6 @@ class PaillierPublicKey(object):
 
         return (nude_ciphertext * obfuscator) % self.nsquare
 
-    def raw_tencrypt(self, plaintext, r_value=None):
-        if not isinstance(plaintext, torch.Tensor):
-            raise TypeError("Expected tensor but got: %s" % type(plaintext))
-        if plaintext.is_floating_point() or plaintext.is_complex():
-            raise TypeError("Expected int type but got: %s" % plaintext.dtype)
-
-        proc = "cuda" if torch.cuda.is_available() else "cpu"
-        plaintext = plaintext.to(proc)
-
-        # if torch.all(self.n - self.max_int <= plaintext) and torch.all(plaintext < self.n):
-        #     neg_plaintext = self.n - plaintext
-        #     neg_ciphertext = (self.n * neg_plaintext + 1) % self.nsquare
-        #     nude_ciphertext = 
-        nude_ciphertext = (self.n * plaintext + 1) % self.nsquare
-
-        r = r_value or self.get_random_lt_n()
-        obfuscator = powmod(r, self.n, self.nsquare)
-
-        return (nude_ciphertext * obfuscator) % self.nsquare
-
     def get_random_lt_n(self):
         """Return a cryptographically random number less than :attr:`n`"""
         return random.SystemRandom().randrange(1, self.n)
@@ -186,16 +170,29 @@ class PaillierPublicKey(object):
           ValueError: if *value* is out of range or *precision* is so
             high that *value* is rounded to zero.
         """
-
+        if isinstance(value, list):
+            return self.encrypt_array(value, precision, r_value)
+        if isinstance(value, t.Tensor):
+            return self.encrypt_tensor(value, precision, r_value)
         if isinstance(value, EncodedNumber):
             encoding = value
-        elif isinstance(value, torch.Tensor):
-            encoding = EncodedNumber.tencode(self, value, precision)
-            return self.encrypt_tencoded(encoding, r_value)
         else:
             encoding = EncodedNumber.encode(self, value, precision)
 
         return self.encrypt_encoded(encoding, r_value)
+
+    def encrypt_tensor(self, tensor, precision, r_value):
+        shape = tensor.shape
+        secrets_list = tensor.flatten().tolist()
+        encrypted_array = self.encrypt_array(secrets_list, precision, r_value)
+        return np.asarray(encrypted_array).reshape(shape)
+
+    def encrypt_array(self, array, precision, r_value):
+        THREAD_POOL = Pool(THREAD_NUM)
+        return list(THREAD_POOL.imap(partial(self.encrypt_val, precision, r_value), (val for val in array)))
+
+    def encrypt_val(self, precision, r_value, val):
+        return(self.encrypt_encoded(EncodedNumber.encode(self, val, precision), r_value))
 
     def encrypt_encoded(self, encoding, r_value):
         """Paillier encrypt an encoded value.
@@ -211,14 +208,6 @@ class PaillierPublicKey(object):
         # If r_value is None, obfuscate in a call to .obfuscate() (below)
         obfuscator = r_value or 1
         ciphertext = self.raw_encrypt(encoding.encoding, r_value=obfuscator)
-        encrypted_number = EncryptedNumber(self, ciphertext, encoding.exponent)
-        if r_value is None:
-            encrypted_number.obfuscate()
-        return encrypted_number
-
-    def encrypt_tencoded(self, encoding, r_value):
-        obfuscator = r_value or 1
-        ciphertext = self.raw_tencrypt(encoding.encoding, r_value=obfuscator)
         encrypted_number = EncryptedNumber(self, ciphertext, encoding.exponent)
         if r_value is None:
             encrypted_number.obfuscate()
@@ -318,8 +307,28 @@ class PaillierPrivateKey(object):
           ValueError: If *encrypted_number* was encrypted against a
             different key.
         """
+        if isinstance(encrypted_number, list):
+          return self.decrypt_array(encrypted_number)
+        if isinstance(encrypted_number, np.ndarray):
+          return self.decrypt_tensor(encrypted_number)
         encoded = self.decrypt_encoded(encrypted_number)
         return encoded.decode()
+
+    def decrypt_tensor(self, encrypted_tensor):
+        shape = encrypted_tensor.shape
+        flattened_list = encrypted_tensor.flatten().tolist()
+        decrypted_list = self.decrypt_array(flattened_list)
+        return t.as_tensor(decrypted_list).reshape(shape)
+
+    def decrypt_array(self, encrypted_array):
+        THREAD_POOL = Pool(THREAD_NUM)
+        return list(THREAD_POOL.imap(self.decrypt_val, (encrypted_num for encrypted_num in encrypted_array)))
+
+
+    def decrypt_val(self, encrypted_num):
+        return(self.decrypt_encoded(encrypted_num).decode())
+
+
 
     def decrypt_encoded(self, encrypted_number, Encoding=None):
         """Return the :class:`EncodedNumber` decrypted from *encrypted_number*.
@@ -774,4 +783,3 @@ class EncryptedNumber(object):
             return powmod(neg_c, neg_scalar, self.public_key.nsquare)
         else:
             return powmod(self.ciphertext(False), plaintext, self.public_key.nsquare)
-
