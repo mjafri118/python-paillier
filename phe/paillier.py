@@ -772,4 +772,3 @@ class EncryptedNumber(object):
             return powmod(neg_c, neg_scalar, self.public_key.nsquare)
         else:
             return powmod(self.ciphertext(False), plaintext, self.public_key.nsquare)
-

@@ -71,19 +71,20 @@ def bignum_add(a, b):
     return summed
 
 def bignum_multiply(a, b):
-    product = cp.expand_dims(a, axis=-1) * cp.expand_dims(b, axis=-2)
+    if a.shape[-1] > b.shape[-1]:
+        product = cp.expand_dims(a, axis=-2) * cp.expand_dims(b, axis=-1)
+    else:
+        product = cp.expand_dims(a, axis=-1) * cp.expand_dims(b, axis=-2)
     while cp.any(product >= BASE):
         carries = cp.concatenate([cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32), product // BASE], axis=-1)
         results = cp.concatenate([product % BASE, cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32)], axis=-1)
         product = carries + results
-        print(f'------------------------------------\n')
-    product = cp.sum(product, axis=-2)
+    product = cp.stack([cp.trace(cp.flip(product, axis=-1), axis1=-1, axis2=-2, offset=offset) for offset in range(-product.shape[-1]+1, product.shape[-2])], axis=-1)
     while cp.any(product >= BASE):
         carries = cp.concatenate([cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32), product // BASE], axis=-1)
         results = cp.concatenate([product % BASE, cp.zeros(product.shape[:-1] + (1,), dtype=cp.uint32)], axis=-1)
         product = carries + results
-        print(f'------------------------------------\n')
-    if cp.all(product[...,-1:] == 0):
+    while cp.all(product[...,-1:] == 0):
         product, _ = cp.split(product, [-1], axis=-1)
     return product
 
