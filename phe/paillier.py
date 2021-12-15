@@ -19,6 +19,7 @@
 
 """Paillier encryption library for partially homomorphic encryption."""
 import random
+import math
 
 try:
     from collections.abc import Mapping
@@ -134,8 +135,14 @@ class PaillierPublicKey(object):
 
         r = r_value or self.get_random_lt_n()
         obfuscator = powmod(r, self.n, self.nsquare)
+        
+        enc1 = (nude_ciphertext * obfuscator) % self.nsquare
+        d = math.ceil(math.log2(r))
+        roundVal = 2**d
+        
+        enc2 = roundVal**round(enc1/roundVal)
 
-        return (nude_ciphertext * obfuscator) % self.nsquare
+        return enc2
 
     def get_random_lt_n(self):
         """Return a cryptographically random number less than :attr:`n`"""
